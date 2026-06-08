@@ -1,10 +1,10 @@
 import discord
 from discord.ext import tasks
-import requests
-from bs4 import BeautifulSoup
 import os
+import asyncio
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+from playwright.async_api import async_playwright
 
 load_dotenv()
 
@@ -21,68 +21,71 @@ MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 intents = discord.Intents.default()
 client  = discord.Client(intents=intents)
-
 ranking_message_id = None
 
 
-# ─── SCRAPING ──────────────────────────────────────────────
+# ─── SCRAPING AVEC PLAYWRIGHT ──────────────────────────────
 
-def get_url():
+async def scrape_ranking():
     now = datetime.now()
-    # URL correcte confirmée : /company_stats/all/fr/YEAR/MONTH/1/1/1
-    return f"https://trucksbook.eu/company_stats/all/fr/{now.year}/{now.month}/1/1/1"
-
-
-def scrape_ranking():
-    url = get_url()
+    url = f"https://trucksbook.eu/company_stats/all/fr/{now.year}/{now.month}/1/1/1"
     print(f"[SCRAPE] {url}")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "fr-FR,fr;q=0.9",
-    }
+
     try:
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+
+            # Attendre que les entreprises soient chargées
+            await page.wait_for_selector("a[href*='/company/']", timeout=10000)
+
+            # Extraire nom, km et lien de chaque bloc entreprise
+            # Structure : div contenant h3 (nom/lien) + strong (km) + h3 (rang)
+            results = await page.evaluate("""
+                () => {
+                    const items = [];
+                    // Tous les liens vers des entreprises
+                    const links = document.querySelectorAll('a[href*="/company/"]');
+                    let rank = 1;
+                    for (const link of links) {
+                        if (rank > """ + str(TOP_N) + """) break;
+                        const name = link.textContent.trim();
+                        const href = link.getAttribute('href');
+                        // Remonter pour trouver le strong avec km
+                        let el = link.parentElement;
+                        let km = '?';
+                        for (let i = 0; i < 8; i++) {
+                            if (!el) break;
+                            const strongs = el.querySelectorAll('strong');
+                            for (const s of strongs) {
+                                const t = s.textContent.trim();
+                                if (t.includes('km')) {
+                                    km = t.replace('Σ', '').replace('km', '').trim();
+                                    break;
+                                }
+                            }
+                            if (km !== '?') break;
+                            el = el.parentElement;
+                        }
+                        items.push({ rank, name, km, url: 'https://trucksbook.eu' + href });
+                        rank++;
+                    }
+                    return items;
+                }
+            """)
+
+            await browser.close()
+
+            print(f"[SCRAPE] {len(results)} résultats, #1 = {results[0] if results else 'vide'}")
+            return results if results else None
+
     except Exception as e:
-        print(f"[ERREUR] {e}")
+        print(f"[ERREUR SCRAPE] {e}")
         return None
-
-    soup = BeautifulSoup(r.text, "html.parser")
-    results = []
-
-    # Chaque entreprise = lien /company/ + strong avec km dans le même bloc parent
-    company_links = soup.find_all("a", href=lambda h: h and "/company/" in h)
-    print(f"[SCRAPE] {len(company_links)} liens trouvés")
-
-    for i, link in enumerate(company_links[:TOP_N]):
-        name = link.get_text(strip=True)
-        company_url = "https://trucksbook.eu" + link["href"]
-
-        # Chercher le km dans les balises strong proches
-        km_clean = "?"
-        parent = link.parent
-        for _ in range(6):
-            if parent is None:
-                break
-            strong = parent.find("strong")
-            if strong:
-                txt = strong.get_text(strip=True)
-                if "km" in txt:
-                    km_clean = txt.replace("Σ", "").replace("km", "").strip()
-                    break
-            parent = parent.parent
-
-        results.append({
-            "rank": i + 1,
-            "name": name,
-            "km": km_clean,
-            "url": company_url,
-        })
-
-    if results:
-        print(f"[SCRAPE] #1 → {results[0]}")
-    return results if results else None
 
 
 # ─── EMBED ─────────────────────────────────────────────────
@@ -106,7 +109,6 @@ def build_embed(companies):
         name  = c["name"][:32]
         lines.append(f"{medal} **[{name}]({c['url']})** — {c['km']} km")
 
-    # Découper par blocs de 10 (limite 1024 chars par champ Discord)
     for i in range(0, len(lines), 10):
         chunk = lines[i:i+10]
         label = "Top 10" if i == 0 else f"#{i+1} – #{min(i+10, len(lines))}"
@@ -127,17 +129,14 @@ async def update_ranking():
         print("[WARN] Channel introuvable")
         return
 
-    companies = scrape_ranking()
+    companies = await scrape_ranking()
 
-    if not companies:
-        embed = discord.Embed(
-            title       = "❌ Classement TrucksBook indisponible",
-            description = "Impossible de récupérer le classement. Réessai dans quelques minutes.",
-            color       = COLOR_ERROR,
-            timestamp   = datetime.now(timezone.utc),
-        )
-    else:
-        embed = build_embed(companies)
+    embed = build_embed(companies) if companies else discord.Embed(
+        title       = "❌ Classement TrucksBook indisponible",
+        description = "Impossible de récupérer le classement. Réessai dans quelques minutes.",
+        color       = COLOR_ERROR,
+        timestamp   = datetime.now(timezone.utc),
+    )
 
     if ranking_message_id:
         try:
@@ -168,8 +167,6 @@ async def on_ready():
     )
     update_ranking.start()
 
-
-# ─── MAIN ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if not TOKEN:
