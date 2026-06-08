@@ -19,8 +19,9 @@ COLOR_GOLD  = 0xF1C40F
 COLOR_ERROR = 0xED4245
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-# Installer Chromium au démarrage si absent
-print("[INIT] Installation de Chromium...")
+# Installer les dépendances système + Chromium au démarrage
+print("[INIT] Installation des dépendances système...")
+subprocess.run(["playwright", "install-deps", "chromium"], check=True)
 subprocess.run(["playwright", "install", "chromium"], check=True)
 print("[INIT] Chromium OK")
 
