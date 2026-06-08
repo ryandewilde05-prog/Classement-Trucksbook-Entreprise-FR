@@ -126,11 +126,16 @@ def build_ranking_embed(companies: list[dict]) -> discord.Embed:
     for c in companies:
         rank   = c["rank"]
         medal  = MEDALS.get(rank, f"`#{rank:>2}`")
-        name   = c["name"]
+        name   = c["name"][:30]  # tronquer les noms très longs
         km     = c["km"]
         lines.append(f"{medal} **[{name}]({c['url']})** — {km} km")
 
-    embed.add_field(name="\u200b", value="\n".join(lines), inline=False)
+    # Discord limite les champs embed à 1024 caractères → découper par blocs de 10
+    chunk_size = 10
+    for i in range(0, len(lines), chunk_size):
+        chunk = lines[i:i + chunk_size]
+        label = f"#{i+1} – #{min(i+chunk_size, len(lines))}" if i > 0 else f"Top {min(chunk_size, len(lines))}"
+        embed.add_field(name=label, value="\n".join(chunk), inline=False)
     embed.set_footer(text=f"Source : trucksbook.eu • Mise à jour toutes les {CHECK_INTERVAL} min")
     return embed
 
