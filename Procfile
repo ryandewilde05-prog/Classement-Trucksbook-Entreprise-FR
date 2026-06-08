@@ -1,1 +1,1 @@
-web: playwright install chromium && python trucksbook_ranking.py
+worker: bash start.sh
