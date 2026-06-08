@@ -1,10 +1,10 @@
 import discord
 from discord.ext import tasks
 import os
+import subprocess
 import asyncio
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright
 
 load_dotenv()
 
@@ -19,12 +19,19 @@ COLOR_GOLD  = 0xF1C40F
 COLOR_ERROR = 0xED4245
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
+# Installer Chromium au démarrage si absent
+print("[INIT] Installation de Chromium...")
+subprocess.run(["playwright", "install", "chromium"], check=True)
+print("[INIT] Chromium OK")
+
+from playwright.async_api import async_playwright
+
 intents = discord.Intents.default()
 client  = discord.Client(intents=intents)
 ranking_message_id = None
 
 
-# ─── SCRAPING AVEC PLAYWRIGHT ──────────────────────────────
+# ─── SCRAPING ──────────────────────────────────────────────
 
 async def scrape_ranking():
     now = datetime.now()
@@ -39,48 +46,41 @@ async def scrape_ranking():
                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             await page.goto(url, wait_until="networkidle", timeout=30000)
-
-            # Attendre que les entreprises soient chargées
             await page.wait_for_selector("a[href*='/company/']", timeout=10000)
 
-            # Extraire nom, km et lien de chaque bloc entreprise
-            # Structure : div contenant h3 (nom/lien) + strong (km) + h3 (rang)
-            results = await page.evaluate("""
-                () => {
+            results = await page.evaluate(f"""
+                () => {{
                     const items = [];
-                    // Tous les liens vers des entreprises
                     const links = document.querySelectorAll('a[href*="/company/"]');
                     let rank = 1;
-                    for (const link of links) {
-                        if (rank > """ + str(TOP_N) + """) break;
+                    for (const link of links) {{
+                        if (rank > {TOP_N}) break;
                         const name = link.textContent.trim();
                         const href = link.getAttribute('href');
-                        // Remonter pour trouver le strong avec km
                         let el = link.parentElement;
                         let km = '?';
-                        for (let i = 0; i < 8; i++) {
+                        for (let i = 0; i < 8; i++) {{
                             if (!el) break;
                             const strongs = el.querySelectorAll('strong');
-                            for (const s of strongs) {
+                            for (const s of strongs) {{
                                 const t = s.textContent.trim();
-                                if (t.includes('km')) {
+                                if (t.includes('km')) {{
                                     km = t.replace('Σ', '').replace('km', '').trim();
                                     break;
-                                }
-                            }
+                                }}
+                            }}
                             if (km !== '?') break;
                             el = el.parentElement;
-                        }
-                        items.push({ rank, name, km, url: 'https://trucksbook.eu' + href });
+                        }}
+                        items.push({{ rank, name, km, url: 'https://trucksbook.eu' + href }});
                         rank++;
-                    }
+                    }}
                     return items;
-                }
+                }}
             """)
 
             await browser.close()
-
-            print(f"[SCRAPE] {len(results)} résultats, #1 = {results[0] if results else 'vide'}")
+            print(f"[SCRAPE] {len(results)} résultats — #1: {results[0] if results else 'vide'}")
             return results if results else None
 
     except Exception as e:
