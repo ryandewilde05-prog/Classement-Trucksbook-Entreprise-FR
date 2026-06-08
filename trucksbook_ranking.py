@@ -49,44 +49,38 @@ async def scrape_ranking():
             await page.goto(url, wait_until="networkidle", timeout=30000)
             await page.wait_for_selector("a[href*='/company/']", timeout=10000)
 
-results = await page.evaluate(f"""
-    () => {{
-        const items = [];
-        // Chercher toutes les lignes du tableau
-        const rows = document.querySelectorAll('tr, .ranking-row, [class*="rank"]');
-        
-        // Approche alternative : récupérer tout le texte autour des liens company
-        const links = document.querySelectorAll('a[href*="/company/"]');
-        let rank = 1;
-        
-        for (const link of links) {{
-            if (rank > {TOP_N}) break;
-            const name = link.textContent.trim();
-            if (!name) continue;
-            const href = link.getAttribute('href');
-            
-            // Chercher les km dans toute la ligne parente (jusqu'à 10 niveaux)
-            let km = '?';
-            let el = link.parentElement;
-            
-            for (let i = 0; i < 10; i++) {{
-                if (!el) break;
-                const text = el.innerText || el.textContent || '';
-                // Regex pour capturer nombre + km
-                const match = text.match(/([\\d\\s.,]+)\\s*km/i);
-                if (match) {{
-                    km = match[1].trim().replace(/\\s+/g, ' ');
-                    break;
+            results = await page.evaluate(f"""
+                () => {{
+                    const items = [];
+                    const links = document.querySelectorAll('a[href*="/company/"]');
+                    let rank = 1;
+
+                    for (const link of links) {{
+                        if (rank > {TOP_N}) break;
+                        const name = link.textContent.trim();
+                        if (!name) continue;
+                        const href = link.getAttribute('href');
+
+                        let km = '?';
+                        let el = link.parentElement;
+
+                        for (let i = 0; i < 10; i++) {{
+                            if (!el) break;
+                            const text = el.innerText || el.textContent || '';
+                            const match = text.match(/([\\d\\s.,]+)\\s*km/i);
+                            if (match) {{
+                                km = match[1].trim().replace(/\\s+/g, ' ');
+                                break;
+                            }}
+                            el = el.parentElement;
+                        }}
+
+                        items.push({{ rank, name, km, url: 'https://trucksbook.eu' + href }});
+                        rank++;
+                    }}
+                    return items;
                 }}
-                el = el.parentElement;
-            }}
-            
-            items.push({{ rank, name, km, url: 'https://trucksbook.eu' + href }});
-            rank++;
-        }}
-        return items;
-    }}
-""")
+            """)
 
             await browser.close()
             print(f"[SCRAPE] {len(results)} résultats — #1: {results[0] if results else 'vide'}")
@@ -95,7 +89,6 @@ results = await page.evaluate(f"""
     except Exception as e:
         print(f"[ERREUR SCRAPE] {e}")
         return None
-
 
 # ─── EMBED ─────────────────────────────────────────────────
 
